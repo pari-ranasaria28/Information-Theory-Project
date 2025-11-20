@@ -9,6 +9,8 @@
   - Minor cleanups for clarity.
 */
 
+
+
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
@@ -24,6 +26,8 @@ using namespace std;
 
 static constexpr double PI_VALUE = 3.1415926536;
 
+
+#include "./Utils/CpuDetect.h"
 #include "./CTimer/CTimer.h"
 #include "./CTrame/CTrame.h"
 #include "CChanel/ChanelLibrary.h"
@@ -97,6 +101,30 @@ int FACTEUR_BETA = (0x0001<<(NB_BITS_MESSAGES/2));
 
 #define MAX_THREADS 4
 
+ void run_benchmark(CDecoder* decoder, CTrame* data, int nb_frames, int iters, int seconds)
+{
+    printf("\n================ BENCHMARK MODE ================\n");
+    printf("(II) Benchmark duration: %d seconds\n", seconds);
+
+    CTimer t(true);
+    long iterations = 0;
+
+    while (t.get_time_sec() < seconds)
+    {
+        decoder->decode(data->get_t_fpoint_data(),
+                        data->get_t_decode_data(),
+                        iters);
+        iterations++;
+    }
+
+    t.stop();
+    double sec = t.get_time_sec();
+
+    double mbps = (_N * (iterations * nb_frames)) / (sec * 1e6);
+    printf("(RESULT) Throughput = %.3f Mbps\n", mbps);
+    printf("================================================\n");
+}
+
 int main(int argc, char* argv[]) {
     // Disable stdout buffering so printf's appear immediately (helps debugging/run-from-explorer)
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -168,8 +196,17 @@ int main(int argc, char* argv[]) {
     int NUM_ACTIVE_THREADS = 1;
     omp_set_num_threads(NUM_ACTIVE_THREADS);
 
+    bool auto_simd = true;
+
+    bool bench_mode = false;
+int bench_seconds = 5; // default 5 sec
+    
+
     // Parse remaining arguments
     for (int p = 2; p < argc; p++) {
+
+      
+
         if (strcmp(argv[p], "-min") == 0) {
             if (p + 1 < argc) { p_simulation.snr_min = atof(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-max") == 0) {
@@ -212,16 +249,25 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[p], "-random") == 0) {
             printf("(II) Random Generator REAL initialization\n");
             srand((unsigned)time(NULL));
+
         } else if (strcmp(argv[p], "-sse") == 0) {
-            arch = "sse";
-            if (format.compare("float") == 0) nb_frames = 4; else nb_frames = 16;
-        } else if (strcmp(argv[p], "-avx") == 0) {
-            arch = "avx";
-            if (format.compare("float") == 0) nb_frames = 8; else nb_frames = 32;
-        } else if (strcmp(argv[p], "-x86") == 0) {
-            arch = "x86";
-            nb_frames = 1;
-        } else if (strcmp(argv[p], "-NMS") == 0) {
+        arch = "sse";
+        auto_simd = false;
+    }
+    else if (strcmp(argv[p], "-avx") == 0) {
+        arch = "avx";
+        auto_simd = false;
+    }
+    else if (strcmp(argv[p], "-x86") == 0) {
+        arch = "x86";
+        auto_simd = false;
+        } 
+        else if (strcmp(argv[p], "-bench") == 0) {
+    bench_mode = true;
+    bench_seconds = atoi(argv[p + 1]);
+    p++;
+}
+        else if (strcmp(argv[p], "-NMS") == 0) {
             if (p + 1 < argc) { type = "NMS"; p_decoder.nms_factor_float = atof(argv[p + 1]); p_decoder.nms_factor_fixed = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-OMS") == 0) {
             if (p + 1 < argc) { type = "OMS"; p_decoder.oms_offset_float = atof(argv[p + 1]); p_decoder.oms_offset_fixed = atoi(argv[p + 1]); p += 1; }
@@ -274,6 +320,12 @@ int main(int argc, char* argv[]) {
             printf("(II) NORMALIZE FACTOR     : %f\n", p_decoder.nms_factor_float);
     }
 
+    if (auto_simd)
+{
+    arch = CpuDetect::best_simd();
+    printf("(II) Auto-selected SIMD mode: %s\n", arch.c_str());
+}
+
     CTimer simu_timer(true);
 
     // Allocation dynamic
@@ -302,6 +354,17 @@ int main(int argc, char* argv[]) {
     CErrorAnalyzer* errCounter[MAX_THREADS];
 
     double Eb_N0 = p_simulation.snr_min;
+
+    // ----------------------------------------------
+// BENCHMARK MODE (no SNR, no channel, pure throughput)
+// ----------------------------------------------
+if (bench_mode)
+{
+    run_benchmark(decoder[0], simu_data[0], nb_frames, p_decoder.nb_iters, bench_seconds);
+    return 0;
+}
+
+
     while (Eb_N0 <= p_simulation.snr_max) {
         for(int i=0; i<4; i++){
             noise[i]->configure(Eb_N0);
@@ -606,6 +669,7 @@ int main(int argc, char* argv[]) {
         delete errCounter[i];
         delete conv_fp[i];
     }
+
 
     return 1;
 }
