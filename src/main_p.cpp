@@ -1,34 +1,29 @@
-/**
-  Copyright (c) 2012-2015 "Bordeaux INP, Bertrand LE GAL"
-  [http://legal.vvv.enseirb-matmeca.fr]
-
-  This file is part of LDPC_C_Simulator.
-
-  LDPC_C_Simulator is free software: you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation, either version 3 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+/*
+  Fixed and cleaned main_p.cpp for Windows + Intel oneAPI/icx.
+  Changes made:
+  - Replaced legacy macro PI with constexpr.
+  - Disabled stdout buffering at program start.
+  - Safer argument parsing (argc check and case-insensitive compare for -fixed).
+  - Fixed printf size_t formatting by casting to unsigned long long and using %%llu.
+  - Replaced variable-length arrays used on stack with std::vector allocated at runtime.
+  - Minor cleanups for clarity.
 */
+
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
 #include <limits.h>
+#include <vector>
+#include <string>
 
 using namespace std;
 
 #include <omp.h>
 
-#define pi  3.1415926536
+static constexpr double PI_VALUE = 3.1415926536;
+
 #include "./CTimer/CTimer.h"
 #include "./CTrame/CTrame.h"
 #include "CChanel/ChanelLibrary.h"
@@ -83,10 +78,7 @@ struct param_simulation {
 #define MESSAGE     _M
 #define INFORMATION NmoinsK
 
-//
 // VARIABLES UTILISEE AFIN DE CALCULER LES VALEURS DES SATURATIONS
-// DES MESSAGES ET DES VARIABLES
-//
 int BITS_LLR     = NB_BITS_MESSAGES;
 int BITS_VAR     = NB_BITS_VARIABLES;
 int BITS_MSG     = NB_BITS_MESSAGES;
@@ -105,14 +97,15 @@ int FACTEUR_BETA = (0x0001<<(NB_BITS_MESSAGES/2));
 
 #define MAX_THREADS 4
 
-////////////////////////////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////////////////////////////
-
 int main(int argc, char* argv[]) {
+    // Disable stdout buffering so printf's appear immediately (helps debugging/run-from-explorer)
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     srand(0);
+
     printf("(II) LDPC DECODER - Scheduled Fixed-point decoder (SSE version - 16 frames)\n");
-    printf("(II) MANIPULATION DE DONNEES (Fixed Point, %ld bits)\n", 8 * sizeof (int));
+    // sizeof(int) is size_t; print as unsigned long long for portability on MSVCRT + icx
+    printf("(II) MANIPULATION DE DONNEES (Fixed Point, %llu bits)\n", (unsigned long long)(8 * sizeof(int)));
     printf("(II) GENEREE : %s - %s\n", __DATE__, __TIME__);
 
     param_simulation p_simulation;
@@ -134,10 +127,10 @@ int main(int argc, char* argv[]) {
     p_decoder.nb_iters   = 30;
 
     p_decoder.nms_factor_fixed = 29;
-    p_decoder.nms_factor_float = 0.75;
+    p_decoder.nms_factor_float = 0.75f;
 
     p_decoder.oms_offset_fixed = 1;
-    p_decoder.oms_offset_float = 0.15;
+    p_decoder.oms_offset_float = 0.15f;
 
 
     int    NOMBRE_ITERATIONS = 30;
@@ -148,188 +141,103 @@ int main(int argc, char* argv[]) {
     string type = "OMS";
     string arch = "sse";
 
-    //
-    // ON SELECTIONNE LE FORMAT DE DONNEES DU DECODEUR
-    //
-    if (strcmp(argv[1], "-fixed") == 0) {
+    // ARG parsing: require at least one argument (format)
+    if (argc < 2) {
+        printf("(EE) Missing argument: decoder format [-float, -fixed]\n");
+        printf("(EE) Usage example: main.exe -float -sse -iter 5 -min 0.5 -max 1.0 -pas 0.5\n");
+        return 0;
+    }
+
+    // Use case-insensitive compare for -fixed (works on Windows with _stricmp)
+#if defined(_WIN32)
+    if (_stricmp(argv[1], "-fixed") == 0) {
+#else
+    if (strcasecmp(argv[1], "-fixed") == 0) {
+#endif
         format = "fixed";
     } else if (strcmp(argv[1], "-float") == 0) {
         format = "float";
     } else {
         printf("(EE) First argument must be the decoder data format [-float, -fixed]\n");
-        printf("(EE) -float : floatting   point format decoder\n");
-        printf("(EE) -fixed : fixed-point point format decoder\n");
-        exit(0);
+        printf("(EE) -float : floating point format decoder\n");
+        printf("(EE) -fixed : fixed-point format decoder\n");
+        return 0;
     }
 
-    //
-    // ON CONFIGURE LE NOMBRE DE THREAD A UTILISER PAR DEFAUT
-    //
+    // Default number of threads
     int NUM_ACTIVE_THREADS = 1;
     omp_set_num_threads(NUM_ACTIVE_THREADS);
 
-    //
-    // ON VA PARSER LES ARGUMENTS DE LIGNE DE COMMANDE
-    //
+    // Parse remaining arguments
     for (int p = 2; p < argc; p++) {
-
-        //
-        // REGLAGE DES PARAMETRES DE SIMULATION
-        //
         if (strcmp(argv[p], "-min") == 0) {
-            p_simulation.snr_min = atof(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { p_simulation.snr_min = atof(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-max") == 0) {
-            p_simulation.snr_max = atof(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { p_simulation.snr_max = atof(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-pas") == 0) {
-            p_simulation.snr_pas = atof(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { p_simulation.snr_pas = atof(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-fer") == 0) {
-            p_simulation.fe_limit = atoi(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { p_simulation.fe_limit = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-wc_fer") == 0) {
             p_simulation.worst_case_fer = true;
-
         } else if (strcmp(argv[p], "-histo") == 0) {
             p_simulation.show_llr_histo = true;
-
-        //
-        // LIMITATION DU TEMPS DE SIMULTATION
-        //
         } else if (strcmp(argv[p], "-timer") == 0) {
-            STOP_TIMER_SECOND = atoi(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { STOP_TIMER_SECOND = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-qef") == 0) {
-            p_simulation.ber_limit       = true;
-            p_simulation.ber_limit_value = (atof(argv[p + 1]));
-            p += 1;
-
-
+            if (p + 1 < argc) { p_simulation.ber_limit = true; p_simulation.ber_limit_value = atof(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-tfer") == 0) {
-            p_simulation.fer_limit       = true;
-            p_simulation.fer_limit_value = (atof(argv[p + 1]));
-            p += 1;
-
-
-            //
-            // REGLAGE DES DU MODELE DU CANAL
-            //
+            if (p + 1 < argc) { p_simulation.fer_limit = true; p_simulation.fer_limit_value = atof(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-bpsk") == 0) {
             p_simulation.qpsk_channel = false;
-
         } else if (strcmp(argv[p], "-qpsk") == 0) {
             p_simulation.qpsk_channel = true;
-
         } else if (strcmp(argv[p], "-Eb/N0") == 0) {
             p_simulation.Es_N0 = false;
-
         } else if (strcmp(argv[p], "-Es/N0") == 0) {
             p_simulation.Es_N0 = true;
-
         } else if (strcmp(argv[p], "-norm-channel") == 0) {
             p_simulation.norm_channel = true;
-
         } else if (strcmp(argv[p], "-encoder") == 0) {
             p_simulation.real_encoder = true;
-
-
-            //
-            // REGLAGE DES DU MODELE DU CANAL
-            //
         } else if (strcmp(argv[p], "-thread") == 0) {
-            int nThreads = atoi(argv[p + 1]);
-            if (nThreads > 4) {
-                printf("(WW) Number of thread can be higher than 4 => Using 4 threads.");
-                NUM_ACTIVE_THREADS = 4;
-            } else if (nThreads < 1) {
-                printf("(WW) Number of thread can be lower than 1 => Using 1 thread.");
-                NUM_ACTIVE_THREADS = 1;
-            } else {
-                NUM_ACTIVE_THREADS = nThreads;
+            if (p + 1 < argc) {
+                int nThreads = atoi(argv[p + 1]);
+                if (nThreads > 4) { printf("(WW) Number of thread can be higher than 4 => Using 4 threads.\n"); NUM_ACTIVE_THREADS = 4; }
+                else if (nThreads < 1) { printf("(WW) Number of thread can be lower than 1 => Using 1 thread.\n"); NUM_ACTIVE_THREADS = 1; }
+                else NUM_ACTIVE_THREADS = nThreads;
+                omp_set_num_threads(NUM_ACTIVE_THREADS);
+                p += 1;
             }
-            omp_set_num_threads(NUM_ACTIVE_THREADS);
-            p += 1;
-
-        //
-        // INITIALISATION ALEATOIRE DU GENERATEUR ALEATOIRE
-        //
         } else if (strcmp(argv[p], "-random") == 0) {
             printf("(II) Random Generator REAL initialization\n");
-            srand(time(NULL));
-
-
-            //
-            // REGLAGE DES DU MODELE DU CANAL
-            //
+            srand((unsigned)time(NULL));
         } else if (strcmp(argv[p], "-sse") == 0) {
             arch = "sse";
-            if (format.compare("float") == 0)
-                nb_frames = 4;
-            else
-                nb_frames = 16;
-
+            if (format.compare("float") == 0) nb_frames = 4; else nb_frames = 16;
         } else if (strcmp(argv[p], "-avx") == 0) {
             arch = "avx";
-            if (format.compare("float") == 0)
-                nb_frames = 8;
-            else
-                nb_frames = 32;
-
+            if (format.compare("float") == 0) nb_frames = 8; else nb_frames = 32;
         } else if (strcmp(argv[p], "-x86") == 0) {
             arch = "x86";
             nb_frames = 1;
-
         } else if (strcmp(argv[p], "-NMS") == 0) {
-            type = "NMS";
-            p_decoder.nms_factor_float = atof(argv[p + 1]);
-            p_decoder.nms_factor_fixed = atoi(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { type = "NMS"; p_decoder.nms_factor_float = atof(argv[p + 1]); p_decoder.nms_factor_fixed = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-OMS") == 0) {
-            type = "OMS";
-            p_decoder.oms_offset_float = atof(argv[p + 1]);
-            p_decoder.oms_offset_fixed = atoi(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { type = "OMS"; p_decoder.oms_offset_float = atof(argv[p + 1]); p_decoder.oms_offset_fixed = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-iter") == 0) {
-            NOMBRE_ITERATIONS      = atoi(argv[p + 1]);
-            p_decoder.nb_iters = atoi(argv[p + 1]);
-            p += 1;
-
+            if (p + 1 < argc) { NOMBRE_ITERATIONS = atoi(argv[p + 1]); p_decoder.nb_iters = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-var") == 0) {
-            vSAT_NEG_VAR = (-(0x0001 << (atoi(argv[p + 1]) - 1)) + 1);
-            vSAT_POS_VAR = ( (0x0001 << (atoi(argv[p + 1]) - 1)) - 1);
-            BITS_VAR     = atoi(argv[p + 1]);
-            p           += 1;
-
+            if (p + 1 < argc) { vSAT_NEG_VAR = (-(0x0001 << (atoi(argv[p + 1]) - 1)) + 1); vSAT_POS_VAR = ((0x0001 << (atoi(argv[p + 1]) - 1)) - 1); BITS_VAR = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-msg") == 0) {
-            vSAT_NEG_MSG = (-(0x0001 << (atoi(argv[p + 1]) - 1)) + 1);
-            vSAT_POS_MSG = ( (0x0001 << (atoi(argv[p + 1]) - 1)) - 1);
-            BITS_MSG     = atoi(argv[p + 1]);
-            p           += 1;
-
+            if (p + 1 < argc) { vSAT_NEG_MSG = (-(0x0001 << (atoi(argv[p + 1]) - 1)) + 1); vSAT_POS_MSG = ((0x0001 << (atoi(argv[p + 1]) - 1)) - 1); BITS_MSG = atoi(argv[p + 1]); p += 1; }
         } else if (strcmp(argv[p], "-llr") == 0) {
-            vSAT_NEG_LLR = (-(0x0001 << (atoi(argv[p + 1]) - 1)) + 1);
-            vSAT_POS_LLR = ((0x0001 << (atoi(argv[p + 1]) - 1)) - 1);
-            BITS_LLR     = atoi(argv[p + 1]);
-            vFRAQ_LLR    = BITS_LLR / 2;
-            FACTEUR_BETA = (0x0001 << (vFRAQ_LLR));
-            p           += 1;
-
+            if (p + 1 < argc) { vSAT_NEG_LLR = (-(0x0001 << (atoi(argv[p + 1]) - 1)) + 1); vSAT_POS_LLR = ((0x0001 << (atoi(argv[p + 1]) - 1)) - 1); BITS_LLR = atoi(argv[p + 1]); vFRAQ_LLR = BITS_LLR / 2; FACTEUR_BETA = (0x0001 << (vFRAQ_LLR)); p += 1; }
         } else if (strcmp(argv[p], "-fraq") == 0) {
-            vFRAQ_LLR    = atoi(argv[p + 1]);
-            FACTEUR_BETA = (0x0001 << (vFRAQ_LLR));
-            p           += 1;
-
+            if (p + 1 < argc) { vFRAQ_LLR = atoi(argv[p + 1]); FACTEUR_BETA = (0x0001 << (vFRAQ_LLR)); p += 1; }
         } else {
             printf("(EE) Unknown argument (%d) => [%s]\n", p, argv[p]);
-            exit(0);
+            return 0;
         }
     }
 
@@ -366,12 +274,9 @@ int main(int argc, char* argv[]) {
             printf("(II) NORMALIZE FACTOR     : %f\n", p_decoder.nms_factor_float);
     }
 
-
     CTimer simu_timer(true);
 
-    //
-    // ALLOCATION DYNAMIQUE DES DONNESS NECESSAIRES A LA SIMULATION DU SYSTEME
-    //
+    // Allocation dynamic
     CTrame* simu_data[MAX_THREADS];
     for(int i=0; i<4; i++){
         simu_data[i] = new CTrame(NOEUD, PARITE, nb_frames);
@@ -379,7 +284,7 @@ int main(int argc, char* argv[]) {
 
     CDecoder* decoder[MAX_THREADS];
     for(int i=0; i<4; i++){
-        decoder[i] = CreateDecoder(type, arch, format, p_decoder, vSAT_NEG_VAR, vSAT_POS_VAR, vSAT_NEG_MSG, vSAT_POS_MSG/*, msOffset, msFactor, OFFSET_FACTOR, NORMALIZED_FACTOR*/);
+        decoder[i] = CreateDecoder(type, arch, format, p_decoder, vSAT_NEG_VAR, vSAT_POS_VAR, vSAT_NEG_MSG, vSAT_POS_MSG);
     }
 
     Encoder *encoder[MAX_THREADS];
@@ -393,19 +298,11 @@ int main(int argc, char* argv[]) {
         noise[i]->setNormalize( p_simulation.norm_channel );
     }
 
-    //
-    // ON CREE L'OBJET EN CHARGE DE LA CONVERSION EN VIRGULE FIXE DE L'INFORMATION DU CANAL
-    //
     CFixConversion* conv_fp   [MAX_THREADS];
     CErrorAnalyzer* errCounter[MAX_THREADS];
 
     double Eb_N0 = p_simulation.snr_min;
     while (Eb_N0 <= p_simulation.snr_max) {
-
-        //
-        // ON CREE LE CANAL DE COMMUNICATION (BRUIT GAUSSIEN)
-        //
-
         for(int i=0; i<4; i++){
             noise[i]->configure(Eb_N0);
         }
@@ -425,31 +322,12 @@ int main(int argc, char* argv[]) {
             errCounter[i] = new CErrorAnalyzer(simu_data[i], p_simulation.fe_limit, auto_fe_mode, p_simulation.worst_case_fer);
         }
 
-        // ON GENERE LA PREMIERE TRAME BRUITEE
-        for(int i=0; i<4; i++){
-            encoder[i]->encode();
-        }
+        for(int i=0; i<4; i++) encoder[i]->encode();
+        for(int i=0; i<4; i++) noise[i]->generate();
+        for(int i=0; i<4; i++) conv_fp[i]->generate();
+        for(int i=0; i<4; i++) errCounter[i]->store_enc_bits();
 
-        for(int i=0; i<4; i++){
-            noise[i]->generate();
-        }
-
-        for(int i=0; i<4; i++){
-            conv_fp[i]->generate();
-        }
-
-        for(int i=0; i<4; i++){
-            errCounter[i]->store_enc_bits();
-        }
-
-        //
-        // ON CREE UN OBJET POUR LA MESURE DU TEMPS DE SIMULATION (REMISE A ZERO POUR CHAQUE Eb/N0)
-        //
         CTimer temps_ecoule(true);
-
-        //
-        // ON CREE L'OBJET EN CHARGE DES INFORMATIONS DANS LE TERMINAL UTILISATEUR
-        //
         CTerminal terminal(&errCounters, &temps_ecoule, Eb_N0);
 
         CTimer timer[MAX_THREADS];
@@ -465,29 +343,28 @@ int main(int argc, char* argv[]) {
             int loopf  = (8 * NUM_ACTIVE_THREADS) * (64800 / NOEUD);
             loopf      = loopf > maxLoopF ? maxLoopF: loopf;
 
-            int d1[maxLoopF], d2[maxLoopF], d3[maxLoopF], d4[maxLoopF];
-            int f1[maxLoopF], f2[maxLoopF], f3[maxLoopF], f4[maxLoopF];
+            // allocate vectors sized to loopf instead of VLAs
+            vector<int> d1(loopf), d2(loopf), d3(loopf), d4(loopf);
+            vector<int> f1(loopf), f2(loopf), f3(loopf), f4(loopf);
 
             #pragma omp parallel sections
             {
-
                 #pragma omp section
                 {
                     for (int q = 0; q < loopf; q++) {
-                        float *f_llr = simu_data[0]->get_t_noise_data(); // [NOEUD];
-                        char *i_llr   = simu_data[0]->get_t_fpoint_data();  // [NOEUD];
-                        char *o_llr   = simu_data[0]->get_t_decode_data();  // [NOEUD];
+                        float *f_llr = simu_data[0]->get_t_noise_data();
+                        char *i_llr   = simu_data[0]->get_t_fpoint_data();
+                        char *o_llr   = simu_data[0]->get_t_decode_data();
 
                         timer[0].start();
                         decoder[0]->decode(f_llr, o_llr, NOMBRE_ITERATIONS);
                         decoder[0]->decode(i_llr, o_llr, NOMBRE_ITERATIONS);
                         timer[0].stop();
                         etime[0] += (timer[0].get_time_us() - biais);
-//                        printf("show = %d\n", timer[0].get_time_us());
 
                         encoder[0]->encode();
-                        noise[0]->generate();  // ON GENERE LE BRUIT DU CANAL
-                        conv_fp[0]->generate(); // ON CONVERTIT LES DONNEES EN VIRGULE FIXE
+                        noise[0]->generate();
+                        conv_fp[0]->generate();
                         int q1 = errCounter[0]->nb_be();
                         int fr = errCounter[0]->nb_fe();
                         errCounter[0]->generate();
@@ -500,9 +377,9 @@ int main(int argc, char* argv[]) {
                 #pragma omp section
                 {
                     for (int q = 0; q < loopf; q++) {
-                        float *f_llr = simu_data[1]->get_t_noise_data(); // [NOEUD];
-                        char *i_llr  = simu_data[1]->get_t_fpoint_data();  // [NOEUD];
-                        char *o_llr  = simu_data[1]->get_t_decode_data();  // [NOEUD];
+                        float *f_llr = simu_data[1]->get_t_noise_data();
+                        char *i_llr  = simu_data[1]->get_t_fpoint_data();
+                        char *o_llr  = simu_data[1]->get_t_decode_data();
 
                         timer[1].start();
                         decoder[1]->decode(f_llr, o_llr, NOMBRE_ITERATIONS);
@@ -511,8 +388,8 @@ int main(int argc, char* argv[]) {
                         etime[1] += timer[1].get_time_us() - biais;
 
                         encoder[1]->encode();
-                        noise[1]->generate();  // ON GENERE LE BRUIT DU CANAL
-                        conv_fp[1]->generate(); // ON CONVERTIT LES DONNEES EN VIRGULE FIXE
+                        noise[1]->generate();
+                        conv_fp[1]->generate();
                         int fr = errCounter[1]->nb_fe();
                         int q2 = errCounter[1]->nb_be();
                         errCounter[1]->generate();
@@ -525,9 +402,9 @@ int main(int argc, char* argv[]) {
                 #pragma omp section
                 {
                     for (int q = 0; q < loopf; q++) {
-                        float *f_llr = simu_data[2]->get_t_noise_data();   // [NOEUD];
-                        char *i_llr  = simu_data[2]->get_t_fpoint_data();  // [NOEUD];
-                        char *o_llr  = simu_data[2]->get_t_decode_data();  // [NOEUD];
+                        float *f_llr = simu_data[2]->get_t_noise_data();
+                        char *i_llr  = simu_data[2]->get_t_fpoint_data();
+                        char *o_llr  = simu_data[2]->get_t_decode_data();
 
                         timer[2].start();
                         decoder[2]->decode(f_llr, o_llr, NOMBRE_ITERATIONS);
@@ -536,8 +413,8 @@ int main(int argc, char* argv[]) {
                         etime[2] += timer[2].get_time_us() - biais;
 
                         encoder[2]->encode();
-                        noise[2]->generate();   // ON GENERE LE BRUIT DU CANAL
-                        conv_fp[2]->generate(); // ON CONVERTIT LES DONNEES EN VIRGULE FIXE
+                        noise[2]->generate();
+                        conv_fp[2]->generate();
                         int q3 = errCounter[2]->nb_be();
                         int fr = errCounter[2]->nb_fe();
                         errCounter[2]->generate();
@@ -550,9 +427,9 @@ int main(int argc, char* argv[]) {
                 #pragma omp section
                 {
                     for (int q = 0; q < loopf; q++) {
-                        float *f_llr = simu_data[3]->get_t_noise_data(); // [NOEUD];
-                        char *i_llr = simu_data[3]->get_t_fpoint_data();  // [NOEUD];
-                        char *o_llr = simu_data[3]->get_t_decode_data();  // [NOEUD];
+                        float *f_llr = simu_data[3]->get_t_noise_data();
+                        char *i_llr = simu_data[3]->get_t_fpoint_data();
+                        char *o_llr = simu_data[3]->get_t_decode_data();
 
                         timer[3].start();
                         decoder[3]->decode(f_llr, o_llr, NOMBRE_ITERATIONS);
@@ -561,8 +438,8 @@ int main(int argc, char* argv[]) {
                         etime[3] += timer[3].get_time_us() - biais;
 
                         encoder[3]->encode();
-                        noise[3]->generate();  // ON GENERE LE BRUIT DU CANAL
-                        conv_fp[3]->generate(); // ON CONVERTIT LES DONNEES EN VIRGULE FIXE
+                        noise[3]->generate();
+                        conv_fp[3]->generate();
                         int q4 = errCounter[3]->nb_be();
                         int fr = errCounter[3]->nb_fe();
                         errCounter[3]->generate();
@@ -572,11 +449,8 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
-            //
-            // ON COMPTE LE NOMBRE D'ERREURS DANS LA TRAME DECODE
-            //
-            for (int q = 0; q < loopf; q++) {
 
+            for (int q = 0; q < loopf; q++) {
                 int diff = ((f1[q] - 1) > 0) ? (f1[q] - 1) : 0;
                 errCounters.generate(d1[q] - diff);
                 for (int z = 1; z < nb_frames; z++) errCounters.generate(f1[q] > z ? 1 : 0);
@@ -593,36 +467,20 @@ int main(int argc, char* argv[]) {
                 errCounters.generate(d4[q] - diff);
                 for (int z = 1; z < nb_frames; z++) errCounters.generate(f4[q] > z ? 1 : 0);
             }
-            //
-            // ON compare le Frame Error avec la limite imposee par l'utilisateur. Si on depasse
-            // alors on affiche les resultats sur Eb/N0 courant.
-            //
-            if (errCounters.fe_limit_achieved() == true) {
-                break;
-            }
 
-            //
-            // ON REGARDE SI L'UTILISATEUR A LIMITE LE TEMPS DE SIMULATION...
-            //
-            if ((simu_timer.get_time_sec() >= STOP_TIMER_SECOND) && (STOP_TIMER_SECOND != -1)) {
-                break;
-            }
-
-            //
-            // AFFICHAGE A L'ECRAN DE L'EVOLUTION DE LA SIMULATION SI NECESSAIRE
-            //
+            if (errCounters.fe_limit_achieved() == true) break;
+            if ((simu_timer.get_time_sec() >= STOP_TIMER_SECOND) && (STOP_TIMER_SECOND != -1)) break;
             terminal.temp_report();
         }
-
 
         terminal.final_report();
 
         if (STOP_TIMER_SECOND != -1) {
             printf("(PERF) H. LAYERED %d fixed, %dx%d LDPC code, %d its, %d threads\n", nb_frames, NOEUD, PARITE, NOMBRE_ITERATIONS, NUM_ACTIVE_THREADS);
-            float sum = 0.0;
+            float sum = 0.0f;
             for (int z = 0; z < NUM_ACTIVE_THREADS; z++) {
-                float nf = (errCounters.nb_processed_frames() / 4); // 4 car 4 threads...
-                float nb = ((nf) * (1000000.0 / etime[z]) * NOEUD) / 1000.0 / 1000.0;
+                float nf = (errCounters.nb_processed_frames() / 4.0f);
+                float nb = ((nf) * (1000000.0f / etime[z]) * NOEUD) / 1000.0f / 1000.0f;
                 printf("(PERF) Kernel Execution time = %ld us for %.0f frames => %1.3f Mbps\n", etime[z], nf, nb);
                 sum += nb;
             }
@@ -650,30 +508,17 @@ int main(int argc, char* argv[]) {
                 break;
             }
         }
-
     }
 
-    ////////////////////////////////////////////////////////////////////////////////
-    //
-    //
-    // SECOND EVALUATION OF THE THROUGHPUT WITHOUT ENCODED FRAME REGENERATION
-    //
-    //
-    if( STOP_TIMER_SECOND != -1 )
-    {
+    // SECOND EVALUATION
+    if( STOP_TIMER_SECOND != -1 ) {
         int exec = 0;
         const int t_eval = STOP_TIMER_SECOND;
 
-
-        //
-        // ONE THREAD MODE
-        //
         if (NUM_ACTIVE_THREADS == 1) {
             CTimer t_Timer1(true);
             while (t_Timer1.get_time_sec() < t_eval) {
                 for (int qq = 0; qq < 256; qq++) {
-                    // to limit timer runtime impact on performances (for very small LDPC codes)
-                    // Indeed, depending on OS and CTimer implementations, time read can be long...
                     decoder[0]->decode(simu_data[0]->get_t_fpoint_data(), simu_data[0]->get_t_decode_data(), NOMBRE_ITERATIONS);
                     exec += 1;
                 }
@@ -684,9 +529,6 @@ int main(int argc, char* argv[]) {
             printf("(PERF1) LDPC decoder air throughput = %1.3f Mbps\n", debit);
         }
 
-        //
-        // TWO THREAD MODE
-        //
         if (NUM_ACTIVE_THREADS == 2) {
             exec = 0;
             omp_set_num_threads(2);
@@ -710,17 +552,11 @@ int main(int argc, char* argv[]) {
                 exec += 2 * looper;
             }
             t_Timer2.stop();
-
-            // for each decoder run, we decoded nb_frames codewords (depending on the SIMD width)
             float debit = _N * ((exec * nb_frames) / ((float) t_Timer2.get_time_sec()));
             debit /= 1000000.0f;
             printf("(PERF2) LDPC decoder air throughput = %1.3f Mbps\n", debit);
         }
 
-
-        //
-        // FOUR THREAD MODE
-        //
         if (NUM_ACTIVE_THREADS == 4) {
             exec = 0;
             omp_set_num_threads(4);
@@ -741,7 +577,7 @@ int main(int argc, char* argv[]) {
                             decoder[1]->decode(simu_data[1]->get_t_fpoint_data(), simu_data[1]->get_t_decode_data(), NOMBRE_ITERATIONS);
                     }
                     #pragma omp section
-                        {
+                    {
                         for (int qq = 0; qq < looper; qq++)
                             decoder[2]->decode(simu_data[2]->get_t_fpoint_data(), simu_data[2]->get_t_decode_data(), NOMBRE_ITERATIONS);
                     }
@@ -761,14 +597,7 @@ int main(int argc, char* argv[]) {
         }
         exit(0);
     }
-    //
-    //
-    //
-    ////////////////////////////////////////////////////////////////////////////////
 
-    //
-    // ON FAIT LE MENAGE PARMIS TOUS LES OBJETS CREES DYNAMIQUEMENT...
-    //
     for(int i=0; i<4; i++){
         delete simu_data[i];
         delete noise[i];
